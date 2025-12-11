@@ -12,10 +12,14 @@ namespace DotNetSecurityToolkit.Crypto;
 public sealed class Pbkdf2PasswordHasher : IPasswordHasher
 {
     private readonly SecurityToolkitOptions _options;
+    private readonly ISecurityEventSink _eventSink;
 
-    public Pbkdf2PasswordHasher(IOptions<SecurityToolkitOptions> options)
+    private int EffectiveIterations => Math.Max(_options.PasswordHashIterations, _options.MinimumPasswordHashIterations);
+
+    public Pbkdf2PasswordHasher(IOptions<SecurityToolkitOptions> options, ISecurityEventSink eventSink)
     {
         _options = options.Value ?? throw new ArgumentNullException(nameof(options));
+        _eventSink = eventSink ?? throw new ArgumentNullException(nameof(eventSink));
     }
 
     public string HashPassword(string password)
@@ -30,13 +34,13 @@ public sealed class Pbkdf2PasswordHasher : IPasswordHasher
         using var pbkdf2 = new Rfc2898DeriveBytes(
             password,
             salt,
-            _options.PasswordHashIterations,
+            EffectiveIterations,
             HashAlgorithmName.SHA256);
 
         var key = pbkdf2.GetBytes(_options.PasswordKeySize);
 
         return string.Join('.',
-            _options.PasswordHashIterations.ToString(),
+            EffectiveIterations.ToString(),
             Convert.ToBase64String(salt),
             Convert.ToBase64String(key));
     }
@@ -82,6 +86,16 @@ public sealed class Pbkdf2PasswordHasher : IPasswordHasher
     {
         var isValid = VerifyHashedPassword(hash, password);
         needsRehash = isValid && NeedsRehash(hash);
+
+        if (needsRehash)
+        {
+            _eventSink.Record("password.needs_rehash", new Dictionary<string, object?>
+            {
+                ["iterations"] = ParseHashComponents(hash).Iterations,
+                ["targetIterations"] = EffectiveIterations
+            });
+        }
+
         return isValid;
     }
 
@@ -90,7 +104,7 @@ public sealed class Pbkdf2PasswordHasher : IPasswordHasher
         try
         {
             var parts = ParseHashComponents(hash);
-            return parts.Iterations < _options.PasswordHashIterations || parts.Key.Length != _options.PasswordKeySize;
+            return parts.Iterations < EffectiveIterations || parts.Key.Length != _options.PasswordKeySize;
         }
         catch
         {
@@ -108,12 +122,12 @@ public sealed class Pbkdf2PasswordHasher : IPasswordHasher
         using var pbkdf2 = new Rfc2898DeriveBytes(
             password,
             salt,
-            _options.PasswordHashIterations,
+            EffectiveIterations,
             HashAlgorithmName.SHA256);
 
         var key = pbkdf2.GetBytes(_options.PasswordKeySize);
 
-        return $"{_options.PasswordHashIterations}.{Convert.ToBase64String(salt)}.{Convert.ToBase64String(key)}";
+        return $"{EffectiveIterations}.{Convert.ToBase64String(salt)}.{Convert.ToBase64String(key)}";
     }
 
     public (int Iterations, byte[] Salt, byte[] Key) ParseHashComponents(string hash)
@@ -125,5 +139,4 @@ public sealed class Pbkdf2PasswordHasher : IPasswordHasher
             Convert.FromBase64String(parts[2])
         );
     }
-
 }

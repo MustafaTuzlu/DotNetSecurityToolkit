@@ -23,6 +23,11 @@ public sealed class SecurityToolkitOptions
     public int PasswordHashIterations { get; set; } = 100_000;
 
     /// <summary>
+    /// Minimum iterations enforced even if configuration provides a smaller number.
+    /// </summary>
+    public int MinimumPasswordHashIterations { get; set; } = 120_000;
+
+    /// <summary>
     /// Size of the salt in bytes for password hashing.
     /// </summary>
     public int PasswordSaltSize { get; set; } = 16;
@@ -31,4 +36,9 @@ public sealed class SecurityToolkitOptions
     /// Size of the derived key in bytes.
     /// </summary>
     public int PasswordKeySize { get; set; } = 32;
+
+    /// <summary>
+    /// Whether to prefer ASP.NET Core Data Protection for encryption operations when available.
+    /// </summary>
+    public bool PreferDataProtection { get; set; } = true;
 }
