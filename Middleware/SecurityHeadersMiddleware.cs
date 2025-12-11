@@ -37,7 +37,7 @@ public sealed class SecurityHeadersMiddleware
 
         if (_options.EnableReferrerPolicy)
         {
-            context.Response.Headers.ReferrerPolicy = _options.ReferrerPolicy;
+            context.Response.Headers["Referrer-Policy"] = _options.ReferrerPolicy;
         }
 
         if (_options.EnableCsp)

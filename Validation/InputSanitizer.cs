@@ -8,7 +8,7 @@ namespace DotNetSecurityToolkit.Validation;
 /// </summary>
 public sealed class InputSanitizer : IInputSanitizer
 {
-    private static readonly Regex UnsafeCharacters = new("[^\w@\-\.: ]", RegexOptions.Compiled);
+    private static readonly Regex UnsafeCharacters = new(@"[^\w@\-\.: ]", RegexOptions.Compiled);
 
     public string Sanitize(string input, int maxLength = 2048)
     {

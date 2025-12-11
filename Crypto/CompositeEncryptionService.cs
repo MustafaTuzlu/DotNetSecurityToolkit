@@ -1,6 +1,7 @@
 using DotNetSecurityToolkit.Abstractions;
 using DotNetSecurityToolkit.Configuration;
 using Microsoft.Extensions.Options;
+using System.Text.Json;
 
 namespace DotNetSecurityToolkit.Crypto;
 
