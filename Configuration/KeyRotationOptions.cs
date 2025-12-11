@@ -11,8 +11,7 @@ public sealed class KeyRotationOptions
     /// <summary>
     /// Current key identifier to use for encryption/signing operations.
     /// </summary>
-    public string CurrentKeyId { get; set; } = "default";
-
+    public string CurrentKeyId { get; set; } = "default"; 
     /// <summary>
     /// Versioned keys dedicated to encryption payloads.
     /// </summary>
