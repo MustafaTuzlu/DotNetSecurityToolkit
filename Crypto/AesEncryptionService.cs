@@ -3,6 +3,7 @@ using DotNetSecurityToolkit.Configuration;
 using Microsoft.Extensions.Options;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 
 namespace DotNetSecurityToolkit.Crypto;
 
@@ -127,6 +128,18 @@ public sealed class AesEncryptionService : IEncryptionService
         {
             return false;
         }
+    }
+
+    public string EncryptObject<T>(T value, JsonSerializerOptions? serializerOptions = null)
+    {
+        var json = JsonSerializer.Serialize(value, serializerOptions);
+        return Encrypt(json);
+    }
+
+    public T? DecryptObject<T>(string cipherText, JsonSerializerOptions? serializerOptions = null)
+    {
+        var json = Decrypt(cipherText);
+        return JsonSerializer.Deserialize<T>(json, serializerOptions);
     }
 
 }

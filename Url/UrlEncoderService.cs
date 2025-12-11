@@ -1,8 +1,10 @@
 using DotNetSecurityToolkit.Abstractions;
+using Microsoft.AspNetCore.WebUtilities;
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Linq;
 
 namespace DotNetSecurityToolkit.Url;
 
@@ -118,6 +120,63 @@ public sealed class UrlEncoderService : IUrlEncoder
         }
 
         return Regex.Replace(sb.ToString(), "-{2,}", "-").Trim('-');
+    }
+
+    public string EncodeQueryValue(string value)
+    {
+        if (value is null)
+        {
+            throw new ArgumentNullException(nameof(value));
+        }
+
+        return Uri.EscapeDataString(value);
+    }
+
+    public string AppendQueryString(string baseUrl, IDictionary<string, string?> parameters)
+    {
+        if (baseUrl is null)
+        {
+            throw new ArgumentNullException(nameof(baseUrl));
+        }
+
+        if (parameters is null)
+        {
+            throw new ArgumentNullException(nameof(parameters));
+        }
+
+        var url = baseUrl;
+
+        foreach (var pair in parameters.Where(p => p.Value is not null))
+        {
+            url = QueryHelpers.AddQueryString(url, pair.Key, pair.Value);
+        }
+
+        return url;
+    }
+
+    public string EnsureTrailingSlash(string url)
+    {
+        if (url is null)
+        {
+            throw new ArgumentNullException(nameof(url));
+        }
+
+        return url.EndsWith('/') ? url : url + "/";
+    }
+
+    public string CombinePathSegments(params string[] segments)
+    {
+        if (segments is null)
+        {
+            throw new ArgumentNullException(nameof(segments));
+        }
+
+        var cleaned = segments
+            .Where(segment => !string.IsNullOrWhiteSpace(segment))
+            .Select(segment => segment.Trim('/'))
+            .ToArray();
+
+        return string.Join('/', cleaned);
     }
 
 }
