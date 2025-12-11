@@ -2,6 +2,7 @@ using DotNetSecurityToolkit.Abstractions;
 using DotNetSecurityToolkit.Configuration;
 using DotNetSecurityToolkit.Cookies;
 using DotNetSecurityToolkit.Crypto;
+using DotNetSecurityToolkit.Exceptions;
 using DotNetSecurityToolkit.Jwt;
 using DotNetSecurityToolkit.Session;
 using DotNetSecurityToolkit.Url;
@@ -38,6 +39,9 @@ public static class ServiceCollectionExtensions
 
         services.Configure<SecurityToolkitOptions>(
             configuration.GetSection(SecurityToolkitOptions.SectionName));
+        services.Configure<ExceptionHandlingOptions>(
+            configuration.GetSection(SecurityToolkitOptions.SectionName)
+                .GetSection(ExceptionHandlingOptions.SectionName));
 
         RegisterCore(services);
 
@@ -49,7 +53,8 @@ public static class ServiceCollectionExtensions
     /// </summary>
     public static IServiceCollection AddDotNetSecurityToolkit(
         this IServiceCollection services,
-        Action<SecurityToolkitOptions> configureOptions)
+        Action<SecurityToolkitOptions> configureOptions,
+        Action<ExceptionHandlingOptions>? configureExceptionHandling = null)
     {
         if (services is null)
         {
@@ -62,6 +67,7 @@ public static class ServiceCollectionExtensions
         }
 
         services.Configure(configureOptions);
+        services.Configure(configureExceptionHandling ?? (_ => { }));
 
         RegisterCore(services);
 
@@ -149,6 +155,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IUrlEncoder, UrlEncoderService>();
         services.AddSingleton<IEncryptionService, AesEncryptionService>();
         services.AddSingleton<IPasswordHasher, Pbkdf2PasswordHasher>();
+        services.AddSingleton<IExceptionHandlingService, ExceptionHandlingService>();
         services.AddScoped<ICookieManager, CookieManager>();
         services.AddScoped<ISessionManager, SessionManager>();
     }
