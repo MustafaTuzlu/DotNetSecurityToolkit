@@ -3,6 +3,7 @@ using DotNetSecurityToolkit.Configuration;
 using DotNetSecurityToolkit.Cookies;
 using DotNetSecurityToolkit.Crypto;
 using DotNetSecurityToolkit.Jwt;
+using DotNetSecurityToolkit.Session;
 using DotNetSecurityToolkit.Url;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.Extensions.Configuration;
@@ -143,11 +144,13 @@ public static class ServiceCollectionExtensions
     private static void RegisterCore(IServiceCollection services)
     {
         services.AddHttpContextAccessor();
+        services.AddSession();
 
         services.AddSingleton<IUrlEncoder, UrlEncoderService>();
         services.AddSingleton<IEncryptionService, AesEncryptionService>();
         services.AddSingleton<IPasswordHasher, Pbkdf2PasswordHasher>();
         services.AddScoped<ICookieManager, CookieManager>();
+        services.AddScoped<ISessionManager, SessionManager>();
     }
 
     private static void RegisterJwt(IServiceCollection services)
