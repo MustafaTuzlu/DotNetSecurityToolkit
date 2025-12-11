@@ -1,3 +1,5 @@
+using System.Security.Claims;
+
 namespace DotNetSecurityToolkit.Abstractions;
 
 /// <summary>
@@ -37,4 +39,12 @@ public interface ICookieManager
     string? GetDecryptedCookie(string key);
     void DeleteCookie(string key);
 
+}
+
+/// <summary>
+/// JWT token creation abstraction for issuing access tokens.
+/// </summary>
+public interface IJwtTokenService
+{
+    string CreateToken(IEnumerable<Claim> claims, DateTime? expires = null);
 }
