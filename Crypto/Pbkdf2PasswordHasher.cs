@@ -78,6 +78,26 @@ public sealed class Pbkdf2PasswordHasher : IPasswordHasher
         return CryptographicOperations.FixedTimeEquals(expectedKey, actualKey);
     }
 
+    public bool VerifyHashedPassword(string hash, string password, out bool needsRehash)
+    {
+        var isValid = VerifyHashedPassword(hash, password);
+        needsRehash = isValid && NeedsRehash(hash);
+        return isValid;
+    }
+
+    public bool NeedsRehash(string hash)
+    {
+        try
+        {
+            var parts = ParseHashComponents(hash);
+            return parts.Iterations < _options.PasswordHashIterations || parts.Key.Length != _options.PasswordKeySize;
+        }
+        catch
+        {
+            return true;
+        }
+    }
+
     public byte[] GenerateSalt(int size)
     {
         return RandomNumberGenerator.GetBytes(size);

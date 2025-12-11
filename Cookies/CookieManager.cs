@@ -1,5 +1,6 @@
 using DotNetSecurityToolkit.Abstractions;
 using Microsoft.AspNetCore.Http;
+using System.Text.Json;
 
 namespace DotNetSecurityToolkit.Cookies;
 
@@ -7,10 +8,10 @@ namespace DotNetSecurityToolkit.Cookies;
 /// Secure, session-oriented cookie helper.
 /// Values are encrypted using IEncryptionService.
 /// </summary>
-public sealed class CookieManager : ICookieManager
-{
-    private readonly IHttpContextAccessor _httpContextAccessor;
-    private readonly IEncryptionService _encryptionService;
+    public sealed class CookieManager : ICookieManager
+    {
+        private readonly IHttpContextAccessor _httpContextAccessor;
+        private readonly IEncryptionService _encryptionService;
 
     public CookieManager(
         IHttpContextAccessor httpContextAccessor,
@@ -42,6 +43,17 @@ public sealed class CookieManager : ICookieManager
         });
     }
 
+    public void SetEncryptedObjectCookie<T>(string key, T value, DateTimeOffset? expires = null, JsonSerializerOptions? serializerOptions = null)
+    {
+        if (key is null)
+        {
+            throw new ArgumentNullException(nameof(key));
+        }
+
+        var serialized = JsonSerializer.Serialize(value, serializerOptions);
+        SetEncryptedCookie(key, serialized, expires);
+    }
+
     public string? GetDecryptedCookie(string key)
     {
         if (key is null)
@@ -71,6 +83,12 @@ public sealed class CookieManager : ICookieManager
         }
     }
 
+    public string? GetDecryptedCookieOrDefault(string key, string? defaultValue = null)
+    {
+        var value = GetDecryptedCookie(key);
+        return value ?? defaultValue;
+    }
+
     public void DeleteCookie(string key)
     {
         if (key is null)
@@ -82,10 +100,39 @@ public sealed class CookieManager : ICookieManager
         context?.Response.Cookies.Delete(key);
     }
 
+    public void DeleteCookies(params string[] keys)
+    {
+        foreach (var key in keys)
+        {
+            DeleteCookie(key);
+        }
+    }
+
     public bool TryGetDecryptedCookie(string key, out string? value)
     {
         value = GetDecryptedCookie(key);
         return value != null;
+    }
+
+    public bool TryGetDecryptedObjectCookie<T>(string key, out T? value, JsonSerializerOptions? serializerOptions = null)
+    {
+        var serialized = GetDecryptedCookie(key);
+        if (serialized is null)
+        {
+            value = default;
+            return false;
+        }
+
+        try
+        {
+            value = JsonSerializer.Deserialize<T>(serialized, serializerOptions);
+            return value is not null;
+        }
+        catch
+        {
+            value = default;
+            return false;
+        }
     }
 
     public bool CookieExists(string key)
