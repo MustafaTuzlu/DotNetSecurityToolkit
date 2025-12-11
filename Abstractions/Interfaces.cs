@@ -44,10 +44,16 @@ public interface IEncryptionService
 {
     string Encrypt(string plainText);
     string Decrypt(string cipherText);
+    bool TryDecrypt(string cipherText, out string? plainText);
 
     string EncryptBytes(byte[] data);
     byte[] DecryptBytes(string cipher);
     bool IsEncryptedPayload(string cipher);
+
+    /// <summary>
+    /// Attempts to decrypt the cipher and deserialize the JSON payload without throwing.
+    /// </summary>
+    bool TryDecryptObject<T>(string cipherText, out T? value, JsonSerializerOptions? serializerOptions = null);
 
     /// <summary>
     /// Serializes the provided value as JSON and encrypts it.

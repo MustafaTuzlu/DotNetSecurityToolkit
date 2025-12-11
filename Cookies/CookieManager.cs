@@ -8,10 +8,10 @@ namespace DotNetSecurityToolkit.Cookies;
 /// Secure, session-oriented cookie helper.
 /// Values are encrypted using IEncryptionService.
 /// </summary>
-    public sealed class CookieManager : ICookieManager
-    {
-        private readonly IHttpContextAccessor _httpContextAccessor;
-        private readonly IEncryptionService _encryptionService;
+public sealed class CookieManager : ICookieManager
+{
+    private readonly IHttpContextAccessor _httpContextAccessor;
+    private readonly IEncryptionService _encryptionService;
 
     public CookieManager(
         IHttpContextAccessor httpContextAccessor,
@@ -72,15 +72,9 @@ namespace DotNetSecurityToolkit.Cookies;
             return null;
         }
 
-        try
-        {
-            return _encryptionService.Decrypt(encrypted);
-        }
-        catch
-        {
-            // If decryption fails (invalid/old cookie), return null.
-            return null;
-        }
+        return _encryptionService.TryDecrypt(encrypted, out var decrypted)
+            ? decrypted
+            : null;
     }
 
     public string? GetDecryptedCookieOrDefault(string key, string? defaultValue = null)
@@ -116,23 +110,16 @@ namespace DotNetSecurityToolkit.Cookies;
 
     public bool TryGetDecryptedObjectCookie<T>(string key, out T? value, JsonSerializerOptions? serializerOptions = null)
     {
-        var serialized = GetDecryptedCookie(key);
-        if (serialized is null)
+        value = default;
+
+        var context = _httpContextAccessor.HttpContext;
+        if (context is null)
         {
-            value = default;
             return false;
         }
 
-        try
-        {
-            value = JsonSerializer.Deserialize<T>(serialized, serializerOptions);
-            return value is not null;
-        }
-        catch
-        {
-            value = default;
-            return false;
-        }
+        return context.Request.Cookies.TryGetValue(key, out var encrypted)
+               && _encryptionService.TryDecryptObject(encrypted, out value, serializerOptions);
     }
 
     public bool CookieExists(string key)

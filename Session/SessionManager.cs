@@ -104,15 +104,8 @@ public sealed class SessionManager : ISessionManager
         {
             return null;
         }
-        
-        try
-        {
-            return _encryptionService.Decrypt(cipher);
-        }
-        catch
-        {
-            return null;
-        }
+
+        return _encryptionService.TryDecrypt(cipher, out var plainText) ? plainText : null;
     }
 
     private ISession GetSessionOrThrow()
