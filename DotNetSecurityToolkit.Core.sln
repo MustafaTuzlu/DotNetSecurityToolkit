@@ -5,7 +5,7 @@ VisualStudioVersion = 17.14.36717.8
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DotNetSecurityToolkit.Core", "DotNetSecurityToolkit.Core.csproj", "{69F12134-E7EB-A522-30A0-0F1AD134C18A}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DotNetSecurityToolkit.Core.Tests", "..\..\tests\DotNetSecurityToolkit.Core.Tests\DotNetSecurityToolkit.Core.Tests.csproj", "{6B587543-C225-1F8A-AEA7-6768E898F2A0}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DotNetSecurityToolkit.Core.Tests", "Tests\DotNetSecurityToolkit.Core.Tests\DotNetSecurityToolkit.Core.Tests.csproj", "{6B587543-C225-1F8A-AEA7-6768E898F2A0}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
