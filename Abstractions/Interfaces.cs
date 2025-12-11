@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using System.Text.Json;
+using System.Diagnostics;
 
 namespace DotNetSecurityToolkit.Abstractions;
 
@@ -141,3 +142,104 @@ public interface ISessionManager
     void SetEncrypted(string key, string plainText);
     string? GetDecrypted(string key);
 }
+
+/// <summary>
+/// Key purpose categories for rotation-aware key rings.
+/// </summary>
+public enum KeyPurpose
+{
+    Encryption,
+    JwtSigning
+}
+
+/// <summary>
+/// Describes a key entry inside the rotation ring.
+/// </summary>
+public sealed record KeyMaterial(string KeyId, string Value, KeyPurpose Purpose, DateTimeOffset? NotBefore = null, DateTimeOffset? Expires = null);
+
+/// <summary>
+/// Provides access to versioned keys for encryption and signing scenarios.
+/// </summary>
+public interface IKeyRing
+{
+    KeyMaterial GetCurrent(KeyPurpose purpose);
+    IEnumerable<KeyMaterial> GetAll(KeyPurpose purpose);
+    bool TryGet(string keyId, KeyPurpose purpose, out KeyMaterial material);
+}
+
+/// <summary>
+/// Represents a persisted refresh token record that can be bound to a device fingerprint.
+/// </summary>
+public sealed record RefreshTokenEntry(string Token, string SubjectId, string DeviceId, DateTimeOffset ExpiresAt, IDictionary<string, string?> Claims, bool Revoked = false);
+
+/// <summary>
+/// Abstraction for storing and validating refresh tokens.
+/// </summary>
+public interface IRefreshTokenStore
+{
+    Task StoreAsync(RefreshTokenEntry entry, CancellationToken cancellationToken = default);
+    Task<RefreshTokenEntry?> GetAsync(string token, CancellationToken cancellationToken = default);
+    Task RevokeAsync(string token, CancellationToken cancellationToken = default);
+}
+
+/// <summary>
+/// Represents a security audit event.
+/// </summary>
+public sealed record SecurityAuditEvent(string EventType, string Subject, string? Description = null, IDictionary<string, object?>? Metadata = null, DateTimeOffset? Timestamp = null)
+{
+    public DateTimeOffset OccurredAt { get; init; } = Timestamp ?? DateTimeOffset.UtcNow;
+};
+
+/// <summary>
+/// Sink for writing audit events to an external target (logs, SIEM, etc.).
+/// </summary>
+public interface IAuditSink
+{
+    Task WriteAsync(SecurityAuditEvent auditEvent, CancellationToken cancellationToken = default);
+}
+
+/// <summary>
+/// Sanitizes user input using allow-list rules.
+/// </summary>
+public interface IInputSanitizer
+{
+    string Sanitize(string input, int maxLength = 2048);
+    bool IsSafe(string input, int maxLength = 2048);
+}
+
+/// <summary>
+/// Publishes telemetry about security-relevant events.
+/// </summary>
+public interface ISecurityEventSink
+{
+    Activity? BeginScope(string name, IDictionary<string, object?>? tags = null);
+    void Record(string eventName, IDictionary<string, object?>? properties = null);
+}
+
+/// <summary>
+/// Issues and validates double-submit anti-forgery tokens.
+/// </summary>
+public interface IAntiForgeryService
+{
+    AntiForgeryTokenPair IssueToken(string? subject = null, TimeSpan? lifetime = null);
+    bool ValidateToken(string cookieToken, string requestToken, string? subject = null);
+}
+
+/// <summary>
+/// Represents paired tokens for the double-submit cookie pattern.
+/// </summary>
+public sealed record AntiForgeryTokenPair(string CookieToken, string RequestToken, DateTimeOffset ExpiresAt);
+
+/// <summary>
+/// Minimal interface for generating and validating WebAuthn/FIDO2 challenges.
+/// </summary>
+public interface IFidoChallengeService
+{
+    FidoChallenge CreateChallenge(string userId, TimeSpan? lifetime = null);
+    bool ValidateChallenge(string userId, string challenge, string deviceId);
+}
+
+/// <summary>
+/// Simple representation of a FIDO2 challenge issued to a device.
+/// </summary>
+public sealed record FidoChallenge(string UserId, string Challenge, string DeviceId, DateTimeOffset ExpiresAt);

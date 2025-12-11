@@ -8,8 +8,8 @@ using System.Text.Json;
 namespace DotNetSecurityToolkit.Crypto;
 
 /// <summary>
-/// AES-256-CBC based encryption service.
-/// Uses SecurityToolkitOptions.SecretKey as the base key material.
+/// AES-256-CBC based encryption service with key rotation support.
+/// Uses SecurityToolkitOptions.SecretKey or the configured key ring as the base key material.
 /// Output is URL-safe Base64 encoded.
 /// </summary>
 public sealed class AesEncryptionService : IEncryptionService
@@ -17,24 +17,17 @@ public sealed class AesEncryptionService : IEncryptionService
     private static readonly byte[] FormatMarker = Encoding.ASCII.GetBytes("DST1");
     private const int HmacSize = 32; // HMACSHA256 output size
 
-    private readonly SecurityToolkitOptions _options;
     private readonly IUrlEncoder _urlEncoder;
-    private readonly byte[] _keyBytes;
+    private readonly IKeyRing _keyRing;
 
-    public AesEncryptionService(IOptions<SecurityToolkitOptions> options, IUrlEncoder urlEncoder)
+    public AesEncryptionService(
+        IOptions<SecurityToolkitOptions> options,
+        IUrlEncoder urlEncoder,
+        IKeyRing keyRing)
     {
-        _options = options.Value ?? throw new ArgumentNullException(nameof(options));
+        _ = options?.Value ?? throw new ArgumentNullException(nameof(options));
         _urlEncoder = urlEncoder ?? throw new ArgumentNullException(nameof(urlEncoder));
-
-        if (string.IsNullOrWhiteSpace(_options.SecretKey))
-        {
-            throw new InvalidOperationException(
-                "SecurityToolkitOptions.SecretKey must be configured in appsettings.json (section 'DotNetSecurityToolkit').");
-        }
-
-        // Derive a 256-bit key from the configured SecretKey using SHA256.
-        using var sha = SHA256.Create();
-        _keyBytes = sha.ComputeHash(Encoding.UTF8.GetBytes(_options.SecretKey));
+        _keyRing = keyRing ?? throw new ArgumentNullException(nameof(keyRing));
     }
 
     public string Encrypt(string plainText)
@@ -44,14 +37,15 @@ public sealed class AesEncryptionService : IEncryptionService
             throw new ArgumentNullException(nameof(plainText));
         }
 
-        var cipherBytes = EncryptToBytes(plainText, out var iv);
+        var keyBytes = DeriveKeyBytes(_keyRing.GetCurrent(KeyPurpose.Encryption).Value);
+        var cipherBytes = EncryptToBytes(plainText, keyBytes, out var iv);
 
         var macInput = new byte[FormatMarker.Length + iv.Length + cipherBytes.Length];
         Buffer.BlockCopy(FormatMarker, 0, macInput, 0, FormatMarker.Length);
         Buffer.BlockCopy(iv, 0, macInput, FormatMarker.Length, iv.Length);
         Buffer.BlockCopy(cipherBytes, 0, macInput, FormatMarker.Length + iv.Length, cipherBytes.Length);
 
-        using var hmac = new HMACSHA256(_keyBytes);
+        using var hmac = new HMACSHA256(keyBytes);
         var tag = hmac.ComputeHash(macInput);
 
         var payload = new byte[macInput.Length + tag.Length];
@@ -69,13 +63,26 @@ public sealed class AesEncryptionService : IEncryptionService
         }
 
         var combined = _urlEncoder.FromUrlSafeBase64(cipherText);
+        var candidates = GetEncryptionKeys();
 
-        if (IsVersionedPayload(combined))
+        foreach (var key in candidates)
         {
-            return DecryptVersionedPayload(combined);
+            try
+            {
+                if (IsVersionedPayload(combined))
+                {
+                    return DecryptVersionedPayload(combined, key);
+                }
+
+                return DecryptLegacyPayload(combined, key);
+            }
+            catch (CryptographicException)
+            {
+                // try next candidate
+            }
         }
 
-        return DecryptLegacyPayload(combined);
+        throw new CryptographicException("Unable to decrypt payload with available keys.");
     }
 
     public bool TryDecrypt(string cipherText, out string? plainText)
@@ -153,10 +160,10 @@ public sealed class AesEncryptionService : IEncryptionService
         return JsonSerializer.Deserialize<T>(json, serializerOptions);
     }
 
-    private byte[] EncryptToBytes(string plainText, out byte[] iv)
+    private byte[] EncryptToBytes(string plainText, byte[] keyBytes, out byte[] iv)
     {
         using var aes = Aes.Create();
-        aes.Key = _keyBytes;
+        aes.Key = keyBytes;
         aes.Mode = CipherMode.CBC;
         aes.Padding = PaddingMode.PKCS7;
 
@@ -174,7 +181,7 @@ public sealed class AesEncryptionService : IEncryptionService
         return ms.ToArray();
     }
 
-    private string DecryptLegacyPayload(byte[] combined)
+    private string DecryptLegacyPayload(byte[] combined, byte[] keyBytes)
     {
         using var aes = Aes.Create();
         var ivLength = aes.BlockSize / 8;
@@ -189,10 +196,10 @@ public sealed class AesEncryptionService : IEncryptionService
         Buffer.BlockCopy(combined, 0, iv, 0, ivLength);
         Buffer.BlockCopy(combined, ivLength, cipher, 0, cipher.Length);
 
-        return DecryptWithParameters(iv, cipher);
+        return DecryptWithParameters(iv, cipher, keyBytes);
     }
 
-    private string DecryptVersionedPayload(byte[] payload)
+    private string DecryptVersionedPayload(byte[] payload, byte[] keyBytes)
     {
         using var aes = Aes.Create();
         var ivLength = aes.BlockSize / 8;
@@ -209,7 +216,7 @@ public sealed class AesEncryptionService : IEncryptionService
         var expectedTag = new byte[HmacSize];
         Buffer.BlockCopy(payload, macInputLength, expectedTag, 0, HmacSize);
 
-        using var hmac = new HMACSHA256(_keyBytes);
+        using var hmac = new HMACSHA256(keyBytes);
         var actualTag = hmac.ComputeHash(macInput);
         if (!CryptographicOperations.FixedTimeEquals(expectedTag, actualTag))
         {
@@ -223,7 +230,7 @@ public sealed class AesEncryptionService : IEncryptionService
         var cipher = new byte[cipherLength];
         Buffer.BlockCopy(payload, FormatMarker.Length + ivLength, cipher, 0, cipherLength);
 
-        return DecryptWithParameters(iv, cipher);
+        return DecryptWithParameters(iv, cipher, keyBytes);
     }
 
     private static bool IsVersionedPayload(byte[] combined)
@@ -244,10 +251,10 @@ public sealed class AesEncryptionService : IEncryptionService
         return true;
     }
 
-    private string DecryptWithParameters(byte[] iv, byte[] cipher)
+    private string DecryptWithParameters(byte[] iv, byte[] cipher, byte[] keyBytes)
     {
         using var aes = Aes.Create();
-        aes.Key = _keyBytes;
+        aes.Key = keyBytes;
         aes.IV = iv;
         aes.Mode = CipherMode.CBC;
         aes.Padding = PaddingMode.PKCS7;
@@ -259,4 +266,23 @@ public sealed class AesEncryptionService : IEncryptionService
         return reader.ReadToEnd();
     }
 
+    private IEnumerable<byte[]> GetEncryptionKeys()
+    {
+        var keys = _keyRing.GetAll(KeyPurpose.Encryption).ToList();
+        if (!keys.Any())
+        {
+            throw new InvalidOperationException("No encryption keys available.");
+        }
+
+        foreach (var material in keys)
+        {
+            yield return DeriveKeyBytes(material.Value);
+        }
+    }
+
+    private static byte[] DeriveKeyBytes(string keyValue)
+    {
+        using var sha = SHA256.Create();
+        return sha.ComputeHash(Encoding.UTF8.GetBytes(keyValue));
+    }
 }

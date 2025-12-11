@@ -1,11 +1,17 @@
 using DotNetSecurityToolkit.Abstractions;
+using DotNetSecurityToolkit.AntiForgery;
+using DotNetSecurityToolkit.Audit;
 using DotNetSecurityToolkit.Configuration;
 using DotNetSecurityToolkit.Cookies;
 using DotNetSecurityToolkit.Crypto;
 using DotNetSecurityToolkit.Exceptions;
+using DotNetSecurityToolkit.Fido;
 using DotNetSecurityToolkit.Jwt;
+using DotNetSecurityToolkit.Middleware.RateLimiting;
 using DotNetSecurityToolkit.Session;
+using DotNetSecurityToolkit.Telemetry;
 using DotNetSecurityToolkit.Url;
+using DotNetSecurityToolkit.Validation;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -42,6 +48,21 @@ public static class ServiceCollectionExtensions
         services.Configure<ExceptionHandlingOptions>(
             configuration.GetSection(SecurityToolkitOptions.SectionName)
                 .GetSection(ExceptionHandlingOptions.SectionName));
+        services.Configure<KeyRotationOptions>(
+            configuration.GetSection(SecurityToolkitOptions.SectionName)
+                .GetSection(KeyRotationOptions.SectionName));
+        services.Configure<RateLimitingOptions>(
+            configuration.GetSection(SecurityToolkitOptions.SectionName)
+                .GetSection(RateLimitingOptions.SectionName));
+        services.Configure<RefreshTokenOptions>(
+            configuration.GetSection(SecurityToolkitOptions.SectionName)
+                .GetSection(RefreshTokenOptions.SectionName));
+        services.Configure<SecurityHeadersOptions>(
+            configuration.GetSection(SecurityToolkitOptions.SectionName)
+                .GetSection(SecurityHeadersOptions.SectionName));
+        services.Configure<TelemetryOptions>(
+            configuration.GetSection(SecurityToolkitOptions.SectionName)
+                .GetSection(TelemetryOptions.SectionName));
 
         RegisterCore(services);
 
@@ -68,6 +89,11 @@ public static class ServiceCollectionExtensions
 
         services.Configure(configureOptions);
         services.Configure(configureExceptionHandling ?? (_ => { }));
+        services.Configure<KeyRotationOptions>(_ => { });
+        services.Configure<RateLimitingOptions>(_ => { });
+        services.Configure<RefreshTokenOptions>(_ => { });
+        services.Configure<SecurityHeadersOptions>(_ => { });
+        services.Configure<TelemetryOptions>(_ => { });
 
         RegisterCore(services);
 
@@ -151,11 +177,23 @@ public static class ServiceCollectionExtensions
     {
         services.AddHttpContextAccessor();
         services.AddSession();
+        services.AddMemoryCache();
+        services.AddDataProtection();
 
+        services.AddSingleton<ISecurityEventSink, SecurityEventSink>();
+        services.AddSingleton<IKeyRing, KeyRing>();
+        services.AddSingleton<DataProtectionEncryptionService>();
+        services.AddSingleton<AesEncryptionService>();
+        services.AddSingleton<CompositeEncryptionService>();
+        services.AddSingleton<IEncryptionService>(sp => sp.GetRequiredService<CompositeEncryptionService>());
         services.AddSingleton<IUrlEncoder, UrlEncoderService>();
-        services.AddSingleton<IEncryptionService, AesEncryptionService>();
         services.AddSingleton<IPasswordHasher, Pbkdf2PasswordHasher>();
         services.AddSingleton<IExceptionHandlingService, ExceptionHandlingService>();
+        services.AddSingleton<IAuditSink, LoggerAuditSink>();
+        services.AddSingleton<IInputSanitizer, InputSanitizer>();
+        services.AddSingleton<IFidoChallengeService, FidoChallengeService>();
+        services.AddSingleton<IRefreshTokenStore, InMemoryRefreshTokenStore>();
+        services.AddSingleton<IAntiForgeryService, AntiForgeryService>();
         services.AddScoped<ICookieManager, CookieManager>();
         services.AddScoped<ISessionManager, SessionManager>();
     }
@@ -169,19 +207,25 @@ public static class ServiceCollectionExtensions
 
         services
             .AddOptions<JwtBearerOptions>(JwtBearerDefaults.AuthenticationScheme)
-            .Configure<IOptions<JwtOptions>>((options, jwtOptions) =>
+            .Configure<IOptions<JwtOptions>, IKeyRing>((options, jwtOptions, keyRing) =>
             {
-                if (string.IsNullOrWhiteSpace(jwtOptions.Value.SigningKey))
+                if (!keyRing.GetAll(KeyPurpose.JwtSigning).Any())
                 {
                     throw new InvalidOperationException(
                         "JwtOptions.SigningKey must be configured in appsettings.json (section 'DotNetSecurityToolkit:Jwt').");
                 }
 
-                var keyBytes = Encoding.UTF8.GetBytes(jwtOptions.Value.SigningKey);
                 options.TokenValidationParameters = new TokenValidationParameters
                 {
                     ValidateIssuerSigningKey = true,
-                    IssuerSigningKey = new SymmetricSecurityKey(keyBytes),
+                    IssuerSigningKeyResolver = (_, _, _, _) =>
+                    {
+                        return keyRing.GetAll(KeyPurpose.JwtSigning)
+                            .Select(material => new SymmetricSecurityKey(Encoding.UTF8.GetBytes(material.Value))
+                            {
+                                KeyId = material.KeyId
+                            });
+                    },
                     ValidateIssuer = !string.IsNullOrWhiteSpace(jwtOptions.Value.Issuer),
                     ValidateAudience = !string.IsNullOrWhiteSpace(jwtOptions.Value.Audience),
                     ValidIssuer = jwtOptions.Value.Issuer,

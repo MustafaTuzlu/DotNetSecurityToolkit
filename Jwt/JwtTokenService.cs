@@ -11,18 +11,20 @@ using System.Linq;
 namespace DotNetSecurityToolkit.Jwt;
 
 /// <summary>
-/// Service for issuing JWT access tokens using configured <see cref="JwtOptions"/>.
+/// Service for issuing JWT access tokens using configured <see cref="JwtOptions"/> with key rotation support.
 /// </summary>
 public sealed class JwtTokenService : IJwtTokenService
 {
     private readonly JwtOptions _options;
     private readonly JwtSecurityTokenHandler _handler = new();
+    private readonly IKeyRing _keyRing;
 
-    public JwtTokenService(IOptions<JwtOptions> options)
+    public JwtTokenService(IOptions<JwtOptions> options, IKeyRing keyRing)
     {
         _options = options.Value ?? throw new ArgumentNullException(nameof(options));
+        _keyRing = keyRing ?? throw new ArgumentNullException(nameof(keyRing));
 
-        if (string.IsNullOrWhiteSpace(_options.SigningKey))
+        if (string.IsNullOrWhiteSpace(_options.SigningKey) && !_keyRing.GetAll(KeyPurpose.JwtSigning).Any())
         {
             throw new InvalidOperationException(
                 "JwtOptions.SigningKey must be configured in appsettings.json (section 'DotNetSecurityToolkit:Jwt').");
@@ -36,11 +38,7 @@ public sealed class JwtTokenService : IJwtTokenService
             throw new ArgumentNullException(nameof(claims));
         }
 
-        var keyBytes = Encoding.UTF8.GetBytes(_options.SigningKey);
-        var signingCredentials = new SigningCredentials(
-            new SymmetricSecurityKey(keyBytes),
-            SecurityAlgorithms.HmacSha256);
-
+        var signingCredentials = CreateSigningCredentials();
         var now = DateTime.UtcNow;
         var expiresAt = expires ?? now.AddMinutes(_options.AccessTokenExpirationMinutes);
 
@@ -82,18 +80,7 @@ public sealed class JwtTokenService : IJwtTokenService
             throw new ArgumentNullException(nameof(token));
         }
 
-        var keyBytes = Encoding.UTF8.GetBytes(_options.SigningKey);
-        var parameters = new TokenValidationParameters
-        {
-            ValidateIssuer = !string.IsNullOrWhiteSpace(_options.Issuer),
-            ValidIssuer = _options.Issuer,
-            ValidateAudience = !string.IsNullOrWhiteSpace(_options.Audience),
-            ValidAudience = _options.Audience,
-            ValidateIssuerSigningKey = true,
-            IssuerSigningKey = new SymmetricSecurityKey(keyBytes),
-            ValidateLifetime = _options.ValidateLifetime && validateLifetime,
-            ClockSkew = TimeSpan.FromMinutes(1)
-        };
+        var parameters = BuildValidationParameters(validateLifetime);
 
         try
         {
@@ -104,5 +91,39 @@ public sealed class JwtTokenService : IJwtTokenService
         {
             return null;
         }
+    }
+
+    private SigningCredentials CreateSigningCredentials()
+    {
+        var material = _keyRing.GetCurrent(KeyPurpose.JwtSigning);
+        var keyBytes = Encoding.UTF8.GetBytes(material.Value);
+        var signingKey = new SymmetricSecurityKey(keyBytes)
+        {
+            KeyId = material.KeyId
+        };
+
+        return new SigningCredentials(signingKey, SecurityAlgorithms.HmacSha256);
+    }
+
+    private TokenValidationParameters BuildValidationParameters(bool validateLifetime)
+    {
+        return new TokenValidationParameters
+        {
+            ValidateIssuer = !string.IsNullOrWhiteSpace(_options.Issuer),
+            ValidIssuer = _options.Issuer,
+            ValidateAudience = !string.IsNullOrWhiteSpace(_options.Audience),
+            ValidAudience = _options.Audience,
+            ValidateIssuerSigningKey = true,
+            IssuerSigningKeyResolver = (_, _, kid, _) =>
+            {
+                var candidates = _keyRing.GetAll(KeyPurpose.JwtSigning);
+                return candidates.Select(material => new SymmetricSecurityKey(Encoding.UTF8.GetBytes(material.Value))
+                {
+                    KeyId = material.KeyId
+                });
+            },
+            ValidateLifetime = _options.ValidateLifetime && validateLifetime,
+            ClockSkew = TimeSpan.FromMinutes(1)
+        };
     }
 }
