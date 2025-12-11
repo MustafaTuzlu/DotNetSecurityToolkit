@@ -106,6 +106,13 @@ if (_cookieManager.TryGetDecryptedCookie("refresh-token", out var token))
 ```csharp
 var cipher = encryptionService.EncryptObject(new { Message = "secret" });
 var payload = encryptionService.DecryptObject<Dictionary<string, string>>(cipher);
+
+// When you need a non-throwing variant, use TryDecrypt/TryDecryptObject to safely
+// inspect cookies or session values without exception handling.
+if (encryptionService.TryDecryptObject(cipher, out Dictionary<string, string>? safePayload))
+{
+    // safePayload is only set when the MAC and JSON payload are both valid
+}
 ```
 
 ### Using the session helper

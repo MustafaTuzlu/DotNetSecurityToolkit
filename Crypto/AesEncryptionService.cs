@@ -14,6 +14,9 @@ namespace DotNetSecurityToolkit.Crypto;
 /// </summary>
 public sealed class AesEncryptionService : IEncryptionService
 {
+    private static readonly byte[] FormatMarker = Encoding.ASCII.GetBytes("DST1");
+    private const int HmacSize = 32; // HMACSHA256 output size
+
     private readonly SecurityToolkitOptions _options;
     private readonly IUrlEncoder _urlEncoder;
     private readonly byte[] _keyBytes;
@@ -41,30 +44,21 @@ public sealed class AesEncryptionService : IEncryptionService
             throw new ArgumentNullException(nameof(plainText));
         }
 
-        using var aes = Aes.Create();
-        aes.Key = _keyBytes;
-        aes.Mode = CipherMode.CBC;
-        aes.Padding = PaddingMode.PKCS7;
+        var cipherBytes = EncryptToBytes(plainText, out var iv);
 
-        aes.GenerateIV();
-        var iv = aes.IV;
+        var macInput = new byte[FormatMarker.Length + iv.Length + cipherBytes.Length];
+        Buffer.BlockCopy(FormatMarker, 0, macInput, 0, FormatMarker.Length);
+        Buffer.BlockCopy(iv, 0, macInput, FormatMarker.Length, iv.Length);
+        Buffer.BlockCopy(cipherBytes, 0, macInput, FormatMarker.Length + iv.Length, cipherBytes.Length);
 
-        using var encryptor = aes.CreateEncryptor(aes.Key, iv);
-        using var ms = new MemoryStream();
-        using (var cryptoStream = new CryptoStream(ms, encryptor, CryptoStreamMode.Write))
-        using (var writer = new StreamWriter(cryptoStream, Encoding.UTF8))
-        {
-            writer.Write(plainText);
-        }
+        using var hmac = new HMACSHA256(_keyBytes);
+        var tag = hmac.ComputeHash(macInput);
 
-        var cipherBytes = ms.ToArray();
+        var payload = new byte[macInput.Length + tag.Length];
+        Buffer.BlockCopy(macInput, 0, payload, 0, macInput.Length);
+        Buffer.BlockCopy(tag, 0, payload, macInput.Length, tag.Length);
 
-        // Concatenate IV + cipher and encode as URL-safe Base64.
-        var combined = new byte[iv.Length + cipherBytes.Length];
-        Buffer.BlockCopy(iv, 0, combined, 0, iv.Length);
-        Buffer.BlockCopy(cipherBytes, 0, combined, iv.Length, cipherBytes.Length);
-
-        return _urlEncoder.ToUrlSafeBase64(combined);
+        return _urlEncoder.ToUrlSafeBase64(payload);
     }
 
     public string Decrypt(string cipherText)
@@ -76,30 +70,26 @@ public sealed class AesEncryptionService : IEncryptionService
 
         var combined = _urlEncoder.FromUrlSafeBase64(cipherText);
 
-        // Extract IV + cipher from combined bytes.
-        using var aes = Aes.Create();
-        var ivLength = aes.BlockSize / 8;
-        if (combined.Length < ivLength)
+        if (IsVersionedPayload(combined))
         {
-            throw new CryptographicException("Invalid cipher text.");
+            return DecryptVersionedPayload(combined);
         }
 
-        var iv = new byte[ivLength];
-        var cipher = new byte[combined.Length - ivLength];
+        return DecryptLegacyPayload(combined);
+    }
 
-        Buffer.BlockCopy(combined, 0, iv, 0, ivLength);
-        Buffer.BlockCopy(combined, ivLength, cipher, 0, cipher.Length);
-
-        aes.Key = _keyBytes;
-        aes.IV = iv;
-        aes.Mode = CipherMode.CBC;
-        aes.Padding = PaddingMode.PKCS7;
-
-        using var decryptor = aes.CreateDecryptor(aes.Key, aes.IV);
-        using var ms = new MemoryStream(cipher);
-        using var cryptoStream = new CryptoStream(ms, decryptor, CryptoStreamMode.Read);
-        using var reader = new StreamReader(cryptoStream, Encoding.UTF8);
-        return reader.ReadToEnd();
+    public bool TryDecrypt(string cipherText, out string? plainText)
+    {
+        try
+        {
+            plainText = Decrypt(cipherText);
+            return true;
+        }
+        catch
+        {
+            plainText = null;
+            return false;
+        }
     }
 
     public string EncryptBytes(byte[] data)
@@ -122,10 +112,31 @@ public sealed class AesEncryptionService : IEncryptionService
         try
         {
             var raw = _urlEncoder.FromUrlSafeBase64(cipher);
-            return raw.Length > 16; // IV(16) + data
+            return IsVersionedPayload(raw) || raw.Length > 16; // IV(16) + data
         }
         catch
         {
+            return false;
+        }
+    }
+
+    public bool TryDecryptObject<T>(string cipherText, out T? value, JsonSerializerOptions? serializerOptions = null)
+    {
+        value = default;
+
+        if (!TryDecrypt(cipherText, out var plainText) || plainText is null)
+        {
+            return false;
+        }
+
+        try
+        {
+            value = JsonSerializer.Deserialize<T>(plainText, serializerOptions);
+            return value is not null;
+        }
+        catch
+        {
+            value = default;
             return false;
         }
     }
@@ -140,6 +151,112 @@ public sealed class AesEncryptionService : IEncryptionService
     {
         var json = Decrypt(cipherText);
         return JsonSerializer.Deserialize<T>(json, serializerOptions);
+    }
+
+    private byte[] EncryptToBytes(string plainText, out byte[] iv)
+    {
+        using var aes = Aes.Create();
+        aes.Key = _keyBytes;
+        aes.Mode = CipherMode.CBC;
+        aes.Padding = PaddingMode.PKCS7;
+
+        aes.GenerateIV();
+        iv = aes.IV;
+
+        using var encryptor = aes.CreateEncryptor(aes.Key, iv);
+        using var ms = new MemoryStream();
+        using (var cryptoStream = new CryptoStream(ms, encryptor, CryptoStreamMode.Write))
+        using (var writer = new StreamWriter(cryptoStream, Encoding.UTF8))
+        {
+            writer.Write(plainText);
+        }
+
+        return ms.ToArray();
+    }
+
+    private string DecryptLegacyPayload(byte[] combined)
+    {
+        using var aes = Aes.Create();
+        var ivLength = aes.BlockSize / 8;
+        if (combined.Length < ivLength)
+        {
+            throw new CryptographicException("Invalid cipher text.");
+        }
+
+        var iv = new byte[ivLength];
+        var cipher = new byte[combined.Length - ivLength];
+
+        Buffer.BlockCopy(combined, 0, iv, 0, ivLength);
+        Buffer.BlockCopy(combined, ivLength, cipher, 0, cipher.Length);
+
+        return DecryptWithParameters(iv, cipher);
+    }
+
+    private string DecryptVersionedPayload(byte[] payload)
+    {
+        using var aes = Aes.Create();
+        var ivLength = aes.BlockSize / 8;
+        var macInputLength = payload.Length - HmacSize;
+
+        if (macInputLength <= FormatMarker.Length + ivLength)
+        {
+            throw new CryptographicException("Cipher text is too short.");
+        }
+
+        var macInput = new byte[macInputLength];
+        Buffer.BlockCopy(payload, 0, macInput, 0, macInputLength);
+
+        var expectedTag = new byte[HmacSize];
+        Buffer.BlockCopy(payload, macInputLength, expectedTag, 0, HmacSize);
+
+        using var hmac = new HMACSHA256(_keyBytes);
+        var actualTag = hmac.ComputeHash(macInput);
+        if (!CryptographicOperations.FixedTimeEquals(expectedTag, actualTag))
+        {
+            throw new CryptographicException("Cipher text failed integrity validation.");
+        }
+
+        var iv = new byte[ivLength];
+        Buffer.BlockCopy(payload, FormatMarker.Length, iv, 0, ivLength);
+
+        var cipherLength = macInputLength - FormatMarker.Length - ivLength;
+        var cipher = new byte[cipherLength];
+        Buffer.BlockCopy(payload, FormatMarker.Length + ivLength, cipher, 0, cipherLength);
+
+        return DecryptWithParameters(iv, cipher);
+    }
+
+    private static bool IsVersionedPayload(byte[] combined)
+    {
+        if (combined.Length < FormatMarker.Length + HmacSize + 16)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < FormatMarker.Length; i++)
+        {
+            if (combined[i] != FormatMarker[i])
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private string DecryptWithParameters(byte[] iv, byte[] cipher)
+    {
+        using var aes = Aes.Create();
+        aes.Key = _keyBytes;
+        aes.IV = iv;
+        aes.Mode = CipherMode.CBC;
+        aes.Padding = PaddingMode.PKCS7;
+
+        using var decryptor = aes.CreateDecryptor(aes.Key, aes.IV);
+        using var ms = new MemoryStream(cipher);
+        using var cryptoStream = new CryptoStream(ms, decryptor, CryptoStreamMode.Read);
+        using var reader = new StreamReader(cryptoStream, Encoding.UTF8);
+        return reader.ReadToEnd();
     }
 
 }
